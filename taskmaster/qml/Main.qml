@@ -72,7 +72,6 @@ ApplicationWindow {
     // Global shortcuts (spec defaults)
     Shortcut { sequence: "Ctrl+N"; onActivated: newTaskDialog.open() }
     Shortcut { enabled: !commandPalette.visible; sequence: "F2"; onActivated: detailsDialog.openWithSelected(true) }
-    Shortcut { enabled: !commandPalette.visible; sequence: "Ctrl+S"; onActivated: if (controller.currentView === "due" && win.selectedTaskId !== "") controller.completeTask(win.selectedTaskId, "good") }
     Shortcut { enabled: !commandPalette.visible; sequence: "1"; onActivated: if (controller.currentView === "due" && win.selectedTaskId !== "") controller.completeTask(win.selectedTaskId, "again") }
     Shortcut { enabled: !commandPalette.visible; sequence: "2"; onActivated: if (controller.currentView === "due" && win.selectedTaskId !== "") controller.completeTask(win.selectedTaskId, "hard") }
     Shortcut { enabled: !commandPalette.visible; sequence: "3"; onActivated: if (controller.currentView === "due" && win.selectedTaskId !== "") controller.completeTask(win.selectedTaskId, "good") }
@@ -138,8 +137,37 @@ ApplicationWindow {
             tableView.forceActiveFocus()
         }
 
+        function _handleSave() {
+            // Save is context-sensitive (dialog first, then main view).
+            if (detailsDialog.visible && detailsDialog.editMode) {
+                controller.editTask(detailsDialog.taskId, editTitle.text, editNote.text)
+                detailsDialog.editMode = false
+                detailsDialog.reload()
+                return
+            }
+            if (newTaskDialog.visible) {
+                controller.newTask(newTitle.text, newNote.text)
+                newTaskDialog.close()
+                newTitle.text = ""
+                newNote.text = ""
+                return
+            }
+            if (controller.currentView === "settings" && (win.activeFocusItem === dbPathField)) {
+                controller.setDbPath(dbPathField.text)
+                return
+            }
+            if (commandPalette.visible) {
+                commandPalette.close()
+            }
+            if (controller.currentView === "due" && win.selectedTaskId !== "") {
+                controller.completeTask(win.selectedTaskId, "good")
+                return
+            }
+        }
+
         // Global cancel/back (works regardless of focus)
-        Shortcut { sequences: [ StandardKey.Cancel ]; context: Qt.ApplicationShortcut; onActivated: win._handleEscape() }
+        Shortcut { sequences: [ "Esc" ]; context: Qt.ApplicationShortcut; onActivated: win._handleEscape() }
+        Shortcut { sequences: [ "Ctrl+S" ]; context: Qt.ApplicationShortcut; onActivated: win._handleSave() }
 
         function _hasSelection() {
                 return win.selectedTaskId !== "" && win.selectedRow >= 0
@@ -392,17 +420,6 @@ ApplicationWindow {
                         }
                     }
                 }
-                Shortcut {
-                    enabled: commandPalette.visible
-                    sequence: "Ctrl+S"
-                    onActivated: {
-                        if (win._hasSelection() && controller.currentView === "due") {
-                            commandPalette.close()
-                            controller.completeTask(win.selectedTaskId, "good")
-                        }
-                    }
-                }
-
                 contentItem: ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 12
@@ -529,98 +546,86 @@ ApplicationWindow {
                 }
         }
 
-    header: Rectangle {
-        color: Qt.rgba(0x25/255,0x25/255,0x26/255, 0.82)
-        height: 56
-        border.color: "#3C3C3C"
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.margins: 10
-            spacing: 12
-
-            Label {
-                text: "TaskMaster"
-                color: "#E6E6E6"
-                font.pixelSize: 18
-                Layout.preferredWidth: 220
-            }
-
-            TextField {
-                id: searchField
-                Layout.fillWidth: true
-                placeholderText: "Search (title/note) or #tags…"
-                onTextChanged: controller.setSearchQuery(text)
-                Keys.onEscapePressed: {
-                    text = ""
-                    controller.setSearchQuery("")
-                    tableView.forceActiveFocus()
-                }
-                background: Rectangle {
-                    radius: 10
-                    color: Qt.rgba(0x2D/255,0x2D/255,0x30/255, 0.88)
-                    border.color: "#3C3C3C"
-                }
-            }
-
-            RowLayout {
-                Layout.preferredWidth: 320
-                spacing: 14
-
-                Item {
-                    Layout.fillWidth: true
-                }
-
-                Label {
-                    id: themeLabel
-                    text: "Theme: " + controller.theme
-                    color: "#BDBDBD"
-                    ToolTip.visible: themeMouse.containsMouse
-                    ToolTip.text: "View → Theme"
-                    MouseArea { id: themeMouse; anchors.fill: parent; hoverEnabled: true }
-                }
-
-                Label {
-                    id: dbLabel
-                    text: "DB: " + controller.dbLabel
-                    color: "#BDBDBD"
-                    elide: Label.ElideRight
-                    ToolTip.visible: dbMouse.containsMouse
-                    ToolTip.text: controller.dbTooltip
-                    MouseArea { id: dbMouse; anchors.fill: parent; hoverEnabled: true }
-                }
-            }
-        }
-    }
-
-    footer: Rectangle {
-        height: 28
-        color: Qt.rgba(0x25/255,0x25/255,0x26/255, 0.82)
-        border.color: "#3C3C3C"
-
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: 12
-            text: controller.statusMessage
-            color: "#BDBDBD"
-            font.pixelSize: 12
-            elide: Text.ElideRight
-            width: parent.width - 24
-        }
-    }
-
-    RowLayout {
-        // ApplicationWindow children are laid out in contentItem (header/footer excluded).
-        // Anchoring to parent + manual header/footer margins can push content off-screen.
+    ColumnLayout {
+        // Fill the window content area (we implement header/footer manually).
         anchors.fill: win.contentItem
+        spacing: 0
 
         Rectangle {
-            id: sidebar
-            Layout.preferredWidth: 220
-            Layout.fillHeight: true
+            id: headerBar
+            Layout.fillWidth: true
+            Layout.preferredHeight: 56
+            Layout.minimumHeight: 56
             color: Qt.rgba(0x25/255,0x25/255,0x26/255, 0.82)
             border.color: "#3C3C3C"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 12
+
+                Label {
+                    text: "TaskMaster"
+                    color: "#E6E6E6"
+                    font.pixelSize: 18
+                    Layout.preferredWidth: 220
+                }
+
+                TextField {
+                    id: searchField
+                    Layout.fillWidth: true
+                    placeholderText: "Search (title/note) or #tags…"
+                    onTextChanged: controller.setSearchQuery(text)
+                    Keys.onEscapePressed: {
+                        text = ""
+                        controller.setSearchQuery("")
+                        tableView.forceActiveFocus()
+                    }
+                    background: Rectangle {
+                        radius: 10
+                        color: Qt.rgba(0x2D/255,0x2D/255,0x30/255, 0.88)
+                        border.color: "#3C3C3C"
+                    }
+                }
+
+                RowLayout {
+                    Layout.preferredWidth: 320
+                    spacing: 14
+
+                    Item { Layout.fillWidth: true }
+
+                    Label {
+                        id: themeLabel
+                        text: "Theme: " + controller.theme
+                        color: "#BDBDBD"
+                        ToolTip.visible: themeMouse.containsMouse
+                        ToolTip.text: "View → Theme"
+                        MouseArea { id: themeMouse; anchors.fill: parent; hoverEnabled: true }
+                    }
+
+                    Label {
+                        id: dbLabel
+                        text: "DB: " + controller.dbLabel
+                        color: "#BDBDBD"
+                        elide: Label.ElideRight
+                        ToolTip.visible: dbMouse.containsMouse
+                        ToolTip.text: controller.dbTooltip
+                        MouseArea { id: dbMouse; anchors.fill: parent; hoverEnabled: true }
+                    }
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            Rectangle {
+                id: sidebar
+                Layout.preferredWidth: 220
+                Layout.fillHeight: true
+                color: Qt.rgba(0x25/255,0x25/255,0x26/255, 0.82)
+                border.color: "#3C3C3C"
 
             ListView {
                 id: nav
@@ -883,14 +888,6 @@ ApplicationWindow {
                                         placeholderText: "/home/yakisenbei/.local/share/taskmaster.db"
                                         text: controller.dbPath
                                     }
-                                    Shortcut {
-                                        sequence: "Ctrl+S"
-                                        onActivated: {
-                                            if (win.activeFocusItem === dbPathField) {
-                                                controller.setDbPath(dbPathField.text)
-                                            }
-                                        }
-                                    }
                                 }
 
                                 RowLayout {
@@ -930,6 +927,25 @@ ApplicationWindow {
                     }
                 }
             }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            color: Qt.rgba(0x25/255,0x25/255,0x26/255, 0.82)
+            border.color: "#3C3C3C"
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 12
+                text: controller.statusMessage
+                color: "#BDBDBD"
+                font.pixelSize: 12
+                elide: Text.ElideRight
+                width: parent.width - 24
+            }
         }
     }
 
@@ -937,13 +953,17 @@ ApplicationWindow {
         id: newTaskDialog
         modal: true
         focus: true
+        padding: 0
+        background: Rectangle { color: "transparent" }
         x: (win.width - width) / 2
         y: (win.height - height) / 2
         width: 520
         contentItem: Rectangle {
+            anchors.fill: parent
             radius: 12
             color: Qt.rgba(0x2D/255,0x2D/255,0x30/255, 0.88)
             border.color: "#3C3C3C"
+            clip: true
 
             ColumnLayout {
                 anchors.fill: parent
@@ -956,24 +976,6 @@ ApplicationWindow {
                 TextArea { id: newNote; Layout.fillWidth: true; Layout.preferredHeight: 160; placeholderText: "Note" }
 
                 Label { text: "Ctrl+S to save, Esc to cancel"; color: "#7A7A7A" }
-
-                Shortcut {
-                    sequence: "Ctrl+S"
-                    onActivated: {
-                        controller.newTask(newTitle.text, newNote.text)
-                        newTaskDialog.close()
-                        newTitle.text = ""
-                        newNote.text = ""
-                    }
-                }
-                Shortcut {
-                    sequence: "Esc"
-                    onActivated: {
-                        newTaskDialog.close()
-                        newTitle.text = ""
-                        newNote.text = ""
-                    }
-                }
             }
         }
     }
@@ -1374,25 +1376,10 @@ ApplicationWindow {
                 }
 
                 Shortcut {
-                    sequence: "Esc"
-                    onActivated: detailsDialog.close()
-                }
-
-                Shortcut {
                     sequence: "F2"
                     onActivated: {
                         detailsDialog.editMode = true
                         editTitle.forceActiveFocus()
-                    }
-                }
-
-                Shortcut {
-                    sequence: "Ctrl+S"
-                    onActivated: {
-                        if (!detailsDialog.editMode) return
-                        controller.editTask(detailsDialog.taskId, editTitle.text, editNote.text)
-                        detailsDialog.editMode = false
-                        detailsDialog.reload()
                     }
                 }
 
