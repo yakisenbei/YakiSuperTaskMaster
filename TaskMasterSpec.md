@@ -24,7 +24,6 @@
 
 1. ユーザーがタスクを追加する。
 2. 追加直後のタスクは、初回実施のため「今すぐ（Due）」として表示される。
-	 - ただし、初期設定で「追加直後は待ちに入れる」を選べる実装も許容する。
 
 ### 3.2 タスク実施 → 完了操作
 
@@ -73,33 +72,28 @@
 - 現在時刻 $now$ において、$next\_review\_at \le now$ のタスクはDueとする。
 - $next\_review\_at > now$ のタスクはWaitingとする。
 
-### 4.5 通知（任意/拡張）
-
-- Dueになったタスク数が一定以上になった場合に通知する。
-- 1件でもDueになったら通知する設定を持てる。
-
 ### 4.6 設定（目標日数・テーマ）
 
 - ユーザーは「記憶時間の目標日数（= horizon days / $T_{target}$ のオフセット）」を変更できる。
 	- 初期値は **365日（1年）** とする。
 	- 変更は **今後の完了から適用**する（既存 waiting の next_review_at は即時には変更しない）。
-	- 設定画面に **「全タスク再計算」ボタン**を用意し、任意で一括再計算できる。
+	- 設定画面から **「全タスク再計算」アクション**を実行できる（ボタンは置かず、メニュー/コンテキスト/ショートカットで起動する）。
 - ユーザーは表示テーマを切り替えできる。
 	- ライトモード / ダークモード
-	- 可能なら「システム設定に追従」も用意する（任意）。
+	- テーマに応じて、アプリ画面全体の背景画像を切り替える（15.1.6.2）。
 
 ### 4.7 復習の早期終了（ユーザー判断による除外）
 
 - 復習待ちキュー（Due）および復習インターバル中（Waiting）のタスクについて、
 	ユーザーが「十分に復習できた」と判断した場合、それ以降の復習サイクルから除外できる。
 - 本仕様では、データは**論理削除**とし、アーカイブは復元可能とする。
-	- アーカイブ済みはDue化（復習サイクル）対象から外してよい。
+	- アーカイブ済みはDue化（復習サイクル）対象から外す。
 	- 終了理由の記録は行わない。
 
 用語の整理:
 
 - **アーカイブ**: 論理削除（復元可能）
-- **削除**: UI文言として「削除」を出す場合でも、内部は論理削除で統一してよい
+- **削除**: UI文言として「削除」を出す場合でも、内部は論理削除で統一する
 
 ## 5. データ要件（概念モデル）
 
@@ -107,22 +101,24 @@
 
 - id: UUID
 - title: string
-- note: string（任意）
+- note: string（空可）
 - status: enum { due, waiting, archived }
 - created_at: datetime
 - updated_at: datetime
 - next_review_at: datetime（Due/Waiting判定の基準）
-- history_times: datetime[]（完了イベントの時刻列）
-- review_count: int（= len(history_times)、冗長保持は任意）
-- params_override: object（任意。タスク単位でチューニングパラメータを上書き可能）
 
-### 5.2 CompletionEvent（任意: 正規化する場合）
+補足:
+
+- 完了イベントの時刻列（history_times）と復習回数（review_count）は `completion_events` から導出する（保持しない）。
+
+
+### 5.2 CompletionEvent（正規化して保持する）
 
 - id: UUID
 - task_id: UUID
 - completed_at: datetime
 
-※ 実装では `history_times` 配列に保持してもよいし、RDBでイベントとして保持してもよい。
+本仕様の実装では、DB要件（13章）に従い `completion_events` に正規化して保持する。
 
 ## 6. 復習インターバル計算ロジック
 
@@ -136,9 +132,9 @@
 	- 既定値: 0.4
 - $\tau$: retrieval threshold（想起の閾値）
 	- 既定値: 0.0
-- $p_{target}$: 将来時点で保証したい想起確率
+- $p_{target}$: 目標時点で保証したい想起確率
 	- 既定値: 0.90
-- $T_{target}$: 想起確率を保証したい将来の評価時点
+- $T_{target}$: 想起確率を保証したい目標の評価時点
 	- 既定値: $now + 365$ days
 	- **horizon days（目標日数）**はユーザー設定で変更可能（初期365日）
 
@@ -189,7 +185,7 @@ $$
 追加仕様（最小インターバル）:
 
 - 最小インターバルは **1分** とする。
-- `candidate_time` は必ず $now + 1$ minute 以上になるよう下限を適用してよい（推奨）。
+- `candidate_time` は必ず $now + 1$ minute 以上になるよう下限を適用する。
 
 擬似コード（仕様準拠）:
 
@@ -244,15 +240,15 @@ def find_next_review(history_times, now, d, tau, s, p_target, T_target):
 		- もしくは、base_activation 側で `delta_days = max(delta_days, 60/86400)` の下限を持つ
 
 - **時間丸め**
-	- UI表示/通知の都合で、返却した next_review_at は「分」または「5分刻み」などに丸めてもよい。
-	- ただし、Due判定の正当性を崩さないよう一方向（未来側）への丸めを推奨する。
+	- next_review_at は分単位に切り上げて丸める。
+	- 丸めは一方向（未来側）にのみ行う（Due判定の正当性を崩さない）。
 
 ## 7. 状態遷移
 
 ### 7.1 状態
 
 - due: ユーザーに提示すべき
-- waiting: 将来時刻まで待機
+- waiting: 次回復習時刻まで待機
 - archived: 対象外
 
 ### 7.2 遷移
@@ -277,17 +273,17 @@ def find_next_review(history_times, now, d, tau, s, p_target, T_target):
 - タイトル、メモ、タグ
 - 復習回数（= 履歴件数）
 - 次回復習時刻 next_review_at
-- 完了ボタン
+- 完了操作（ボタンは置かない。キー操作/コンテキストメニューで実行）
 - 履歴一覧（timestampの列）
 
 ### 8.3 タスク作成/編集
 
 - title（必須）
-- note（任意）
+- note（空可）
 
 ## 9. 非機能要件
 
-- 時刻はタイムゾーンを保持する（推奨: UTC保存 + 表示はローカル変換）。
+- 時刻は UTC の epoch seconds（INTEGER）で保存し、UI表示はローカルタイムへ変換して表示する。
 - 計算結果は再現可能であること（同じ履歴・同じパラメータなら同じ next_review_at）。
 - ローカルストレージ/DBのいずれでも、履歴の欠損が起きないようにする。
 
@@ -304,7 +300,11 @@ def find_next_review(history_times, now, d, tau, s, p_target, T_target):
 ### 11.1 GUI
 
 - Python + **PySide6 (Qt for Python)** を使用する。
-- 推奨UI構成: Qt Widgets（`QMainWindow` + `QTableView/QListView` + `QDialog`）。
+- UIは **Qt Quick（QML）** で実装する。
+- UIの記述は **QMLファイル** で行う（Pythonコードでウィジェットを組まない）。
+- PythonはQMLをロードし、QMLへ以下を公開する:
+	- 一覧表示用のモデル（Due/Waiting/Archived）
+	- 操作コマンド（完了/アーカイブ/復元/purge/検索/設定変更）
 
 ### 11.0 開発環境（venv）
 
@@ -334,20 +334,18 @@ pip install pyside6
 ### 11.2 DB / SQL
 
 - 永続化は **SQLデータベース** を使用する。
-- 初期実装は配布性を優先し **SQLite** を推奨する。
-	- 将来的にPostgreSQL等へ差し替えられるよう、SQL方言依存を最小化する。
-- Python DBアクセスは以下のいずれか（実装方針としてどちらでも可）
-	- (A) `sqlite3`（標準） + 手書きSQL（推奨: シンプルかつ依存が増えない）
-	- (B) SQLAlchemy（拡張時に有利）
+- 永続化は **SQLite** を使用する。
+- Python DBアクセスは `sqlite3`（標準） + 手書きSQLで実装する。
 
 本仕様書のDDL例はSQLite互換を基本とする。
 
-## 12. アーキテクチャ（推奨）
+## 12. アーキテクチャ
 
 ### 12.1 レイヤ構成
 
-- **UI層（PySide6）**
-	- 画面/ダイアログ、入力検証、ユーザー操作の受け口
+- **UI層（QML + PySide6）**
+	- 画面/ダイアログはQMLファイルで定義し、ユーザー操作を受ける
+	- PythonはUIの状態・モデル・コマンドを提供する
 - **アプリケーション層（UseCase/Service）**
 	- 完了操作、次回復習計算、状態遷移、Due更新などの業務ロジック
 - **ドメイン層（Model）**
@@ -359,11 +357,7 @@ pip install pyside6
 
 - DB保存は **UTC** を基本とする。
 - Python内部は `datetime`（timezone-aware）を基本とする。
-- DBのDATETIMEは実装上、次のどちらかに統一する（混在禁止）:
-	- (推奨) **INTEGER（Unix epoch seconds）**
-	- もしくは TEXT（ISO 8601: `YYYY-MM-DDTHH:MM:SSZ`）
-
-本仕様では、検索・比較・インデックス効率の観点から **epoch seconds を推奨**する。
+- DBのDATETIMEは **INTEGER（Unix epoch seconds, UTC）** に統一する（混在禁止）。
 
 ## 13. DB設計（SQLスキーマ）
 
@@ -377,7 +371,6 @@ pip install pyside6
 
 - `tasks`: タスク本体
 - `completion_events`: 完了（復習）イベント（時系列ログ）
-- `task_params`: タスク単位のパラメータ上書き（任意・拡張）
 
 追加:
 
@@ -433,18 +426,6 @@ CREATE TABLE IF NOT EXISTS completion_events (
 		version INTEGER NOT NULL
 	);
 
--- タスク単位のパラメータ上書き（必要になったら有効化）
-CREATE TABLE IF NOT EXISTS task_params (
-	task_id    TEXT PRIMARY KEY,
-	d          REAL,
-	s          REAL,
-	tau        REAL,
-	p_target   REAL,
-	horizon_days INTEGER,                           -- 例: 365
-
-	FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-);
-
 CREATE INDEX IF NOT EXISTS idx_tasks_status_next_review
 	ON tasks(status, next_review_at);
 
@@ -468,12 +449,13 @@ CREATE INDEX IF NOT EXISTS idx_tag_map_task
 
 SQLiteは動的型付け（Type Affinity）だが、他RDBへ移行しやすいよう **論理型** を定義する。
 
-#### 13.4.1 論理型 → SQLite推奨型
+SQLiteは動的型付け（Type Affinity）だが、本仕様では可読性のため **論理型** を定義する。
+
+#### 13.4.1 論理型 → SQLite型
 
 - **UUID**
 	- 論理型: UUID
 	- SQLite: `TEXT`（例: `"550e8400-e29b-41d4-a716-446655440000"`）
-	- 他RDB: PostgreSQLなら `UUID`
 
 - **文字列**
 	- 論理型: string
@@ -482,7 +464,6 @@ SQLiteは動的型付け（Type Affinity）だが、他RDBへ移行しやすい�
 - **真偽**
 	- 論理型: boolean
 	- SQLite: `INTEGER`（0/1）
-	- 他RDB: `BOOLEAN`
 
 - **整数**
 	- 論理型: int
@@ -494,9 +475,7 @@ SQLiteは動的型付け（Type Affinity）だが、他RDBへ移行しやすい�
 
 - **日時（UTC）**
 	- 論理型: datetime
-	- SQLite推奨: `INTEGER`（epoch seconds）
-	- 代替: `TEXT`（ISO 8601）
-	- 他RDB: `TIMESTAMP WITH TIME ZONE`（または `TIMESTAMPTZ`）
+	- SQLite: `INTEGER`（epoch seconds）
 
 - **列挙**
 	- 論理型: enum
@@ -505,8 +484,8 @@ SQLiteは動的型付け（Type Affinity）だが、他RDBへ移行しやすい�
 #### 13.4.2 Python（PySide6）での型変換ルール
 
 - DB保存/比較のため、`datetime` は epoch seconds（int）へ変換して保存する。
-- UI表示はローカルタイムへ変換して表示してよい。
-- 精度は秒単位を基本とし、UI都合の丸め（分/5分）は保存前に行ってよい（6.5参照）。
+- UI表示はローカルタイムへ変換して表示する。
+- 精度は分単位を基本とし、分への切り上げ丸めは保存前に行う（6.5参照）。
 
 ## 14. 主要ユースケース（CRUD + 完了）
 
@@ -515,7 +494,7 @@ SQLiteは動的型付け（Type Affinity）だが、他RDBへ移行しやすい�
 入力:
 
 - title（必須）
-- note（任意）
+- note（空可）
 
 処理:
 
@@ -576,11 +555,11 @@ WHERE status = 'waiting'
 	AND next_review_at <= :now;
 ```
 
-推奨実装:
+実行タイミング（固定）:
 
 - アプリ起動時に1回
-- 一覧表示の更新タイミングで適宜
-- さらに `QTimer` で1分ごと等に実行（軽量）
+- 一覧表示の更新タイミング
+- `QTimer` で1分ごとに実行
 
 ### 14.4 タスクのアーカイブ（論理削除）
 
@@ -591,7 +570,7 @@ WHERE status = 'waiting'
 処理:
 
 - `tasks.deleted_at = now` をセット
-- `tasks.status = 'archived'` としてよい（UIの見た目用）
+- `tasks.status = 'archived'` をセットする
 
 ```sql
 UPDATE tasks
@@ -614,21 +593,17 @@ SET deleted_at = NULL,
 WHERE id = :task_id;
 ```
 
-## 15.5 検索（title/note 同時検索）
+## 15.5 検索（DBベース・ビュー別）
 
 - 検索対象は title と note の両方とする。
-- SQLiteでは `LIKE` による部分一致を最小実装とする。
-	- 将来的に `FTS5` を採用して高速化してもよい（任意）。
+- 検索はインクリメンタル検索（15.1.2）であり、絞り込みはDBクエリで実行する（15.1.2.3）。
+- 検索の適用範囲は「現在表示中のビュー」に従う。
+	- Due/Waiting: `deleted_at IS NULL AND purged_at IS NULL AND status IN ('due','waiting')`
+	- Archived: `deleted_at IS NOT NULL AND purged_at IS NULL AND status = 'archived'`
+- title/note 部分は SQLite の `LIKE` による部分一致を最小実装とする。
+- `#タグ` を含む場合はタグ条件をANDで結合する（20.3）。
 
-最小クエリ例:
-
-```sql
-SELECT *
-FROM tasks
-WHERE deleted_at IS NULL
-	AND status IN ('due', 'waiting')
-	AND (title LIKE :q OR note LIKE :q);
-```
+SQL例は 22.3 / 22.4 / 22.4.1 を参照する。
 
 ## 15.6 キュー（2種類）とソート
 
@@ -639,52 +614,496 @@ WHERE deleted_at IS NULL
 - **インターバル待ちキュー（Waiting）**: `status='waiting'` かつ `deleted_at IS NULL`
 	- ソート: **新しい順**（主に `next_review_at` 降順、NULLは末尾）
 
-※ UIでソートの切替（昇順/降順）を追加してもよいが、デフォルトは上記。
+※ UIでソートの切替（昇順/降順）は提供しない。デフォルトは上記で固定する。
 
 ## 15. 画面要件（PySide6前提の詳細）
 
+### 15.0 UI思想（ボタンレス設計）
+
+本アプリのUI思想は「ボタンを使わない設計」とする。
+
+定義（本仕様における「ボタン」）:
+
+- 画面内に常時配置されるクリック前提のアクションUI（例: `Button` / `ToolButton` / ツールバーの押下ボタン）。
+
+許容する導線（ボタンレスを満たす）:
+
+- メニューバー（`MenuBar`）のアクション
+- コンテキストメニュー（右クリック/二本指タップ相当）
+- キーボードショートカット（最優先の導線）
+- ダブルクリック/Enter などの標準ジェスチャ
+- インライン編集（`TableView` の編集、`Dialog` 内の入力確定をキー操作で行う）
+- ステータスバー（ショートカットのヒント表示）
+
+許容する常設UI（ボタンレス設計と矛盾しないもの）:
+
+- 入力/選択のためのコントロール（例: `TextField`, `ComboBox`）
+	- ただし「アクションを実行するための押下ボタン」は置かない
+
+※ 目的は「UI上のボタンを探して押す」コストをゼロにし、視線移動と意思決定コストを最小化すること。
+
 ### 15.1 メインウィンドウ
-
-- タブまたはセグメントで状態を切替
-
-- タブまたはセグメントで状態を切替
-	- Due
-	- Waiting
-	- Archived
-- 一覧は `QTableView` 推奨
-	- Due: タイトル、最終完了時刻、復習回数、（任意）推定想起確率
-	- Waiting: タイトル、次回復習時刻（ローカル表示）、残り時間
 
 UI方針:
 
-- **ボタン数は最小化**する（主要操作は各行のコンテキストメニュー/右クリック/三点メニューに集約）。
-- 主要導線は「完了」「追加」「検索/フィルタ」のみに寄せる。
+- 画面上にアクション用ボタンを置かない（15.0参照）。
+- 主要導線は「キーボード操作 + 最小の入力（検索/コマンド）」に寄せる。
+- 右クリック（コンテキストメニュー）を第二導線とする。
 - 角が立たない **柔らかな形状**（角丸、余白広め、控えめな枠線）を採用する。
+- ダークモード時の配色は 15.1.6.1 に従い、グレー系を基調として黒をそのまま使う等の強い色を使わない。
 
-### 15.1.1 テーマ切り替え（ライト/ダーク）
+#### 15.1.0 レイアウト（ヘッダー + 左サイドバー + メイン）
 
-- メニューまたは設定画面からライト/ダークを切り替えできる。
-- PySide6では以下の方針のいずれかで実現する。
-	- (A) Qt StyleSheet（QSS）でライト/ダーク2種を用意して切替
-	- (B) `QPalette` を切替
-- テーマ切替は即時反映（アプリ再起動不要）を目標とする。
+画面は以下の3領域で構成する。
+
+1) ヘッダー（上部）
+
+- メニューバー（`MenuBar`）を常時表示する。
+- ヘッダー右側に状態表示領域を置く（固定仕様は 15.1.2.0 を参照）。
+
+2) 左サイドバー（ナビゲーション）
+
+- 表示切替のためのナビゲーションバーを左に固定表示する。
+- 項目（最小）:
+	- Due
+	- Waiting
+	- Archived
+	- Settings
+
+3) メインコンテンツ
+
+- 左サイドバーで選択されたコンテンツを表示する。
+- 実装例: `StackLayout` でビューを切替。
+
+※ 実装上は `ApplicationWindow` をルートにし、上部に `MenuBar`、中央に「左サイドバー + メイン」を配置する（UIはQMLで記述する）。
+
+#### 15.1.1 画面切替（サイドバー）
+
+- サイドバー選択でビューを切替する。
+- キーボードでも切替できること:
+	- Ctrl+1: Due
+	- Ctrl+2: Waiting
+	- Ctrl+3: Archived
+	- Ctrl+4: Settings
+
+表示内容（一覧は `TableView`）:
+
+- Due: タイトル、最終完了時刻、復習回数、次回復習時刻
+- Waiting: タイトル、次回復習時刻（ローカル表示）、残り時間、復習回数
+- Archived: タイトル、アーカイブ時刻（= deleted_at）、最終完了時刻、復習回数
+- Settings: 設定項目一覧（horizon_days, theme, DBパス等）
+
+#### 15.1.1.1 左サイドバーの仕様（固定）
+
+目的:
+
+- 画面切替を「常設のナビゲーション」に集約し、ボタンレス設計でも迷いなく遷移できるようにする。
+
+構成:
+
+- 実装は `ListView` とする（フラットなリスト）。
+- 項目順は固定とする:
+	1. Due
+	2. Waiting
+	3. Archived
+	4. Settings
+
+見た目:
+
+- 幅: 220px（固定）。
+- ラベル: 項目名は短く固定（`Due`, `Waiting`, `Archived`, `Settings`）。
+
+バッジ（情報量・固定）:
+
+- Due と Waiting には件数バッジを表示する。
+	- Due: `status='due' AND deleted_at IS NULL AND purged_at IS NULL` の件数
+	- Waiting: `status='waiting' AND deleted_at IS NULL AND purged_at IS NULL` の件数
+- Archived は件数バッジを表示しない。
+- Settings はバッジを表示しない。
+
+選択・フォーカス:
+
+- 現在表示中のビューは、サイドバーで選択状態として強調表示する。
+- キーボードフォーカスがサイドバーにある場合は、フォーカスリング/ハイライトを表示する（アクセシビリティ）。
+- サイドバー項目の選択変更で、即座にビューを切替する（確認ダイアログ等は不要）。
+
+操作:
+
+- マウス: クリックで切替（ボタンではなくリスト選択として扱う）。
+- キーボード:
+	- ↑/↓: 項目移動
+	- Enter: 選択項目へ切替
+	- Ctrl+1..4: 直接切替（15.1.1）
+
+#### 15.1.2 ヘッダー（検索・表示）
+
+- 検索欄はヘッダーに配置する。
+	- 入力フォーカス: Ctrl+F
+	- 検索はインクリメンタル検索とする（入力に追従してフィルタ適用）。
+	- 解除: Esc（入力クリア + フィルタ解除）
+	- Enter: Focus List（検索確定には使用しない）
+- 検索は以下の両方に対応する（15.5, 20.3と整合）:
+	- title/note 検索
+	- `#タグ` 検索（複数はAND、残り文字列はtitle/note検索とAND）
+
+#### 15.1.2.3 インクリメンタル検索の仕様（固定）
+
+適用範囲:
+
+- 検索は「現在表示中のビュー」に対して適用する（Due/Waiting/Archived）。
+- Settingsビューは検索対象外とする。
+
+適用タイミング:
+
+- 入力文字列が変化したら自動でフィルタを更新する。
+- DBへの問い合わせが発生する場合はデバウンスを入れる（既定: 150ms、実装で調整可）。
+
+実装方針（固定）:
+
+- インクリメンタル検索の絞り込みはDBクエリで実行する（一覧全件をメモリに読み込んでフィルタする方式は採用しない）。
+	- 理由: 件数増加時のパフォーマンスと、DBを正とした一貫性を優先する。
+	- 実装は「デバウンス後にクエリ再実行→モデル差し替え」を基本とする。
+
+クエリ戦略（最小）:
+
+- title/note 部分は 15.5 の `LIKE` を用いた部分一致を最小実装とする。
+- `#タグ` 条件は 22.4 / 22.4.1 のAND検索を使用する。
+- title/note 条件とタグ条件は AND で結合する（20.3と整合）。
+
+クエリ解釈（確定）:
+
+- クエリ文字列中の `#` から始まるトークンをタグ指定として抽出する。
+	- 例: `grammar #english #toeic` → title/noteに`grammar` AND tagに`english` AND tagに`toeic`
+	- タグは 20.2 の正規化（空白縮約+小文字化）を適用して比較する。
+- `#` を含まない残りの文字列は title/note 検索として扱う。
+- クエリが空（空白のみ含む）になった場合はフィルタを解除し、全件表示に戻す。
+
+表示・UX:
+
+- フィルタの結果が0件の場合は、一覧の空状態とは別に「検索結果0件」を表示する。
+
+選択維持:
+
+- フィルタ更新で現在の選択行が残る場合は選択を維持する。
+- 選択行が消えた場合は、先頭行を選択する（結果が0件なら未選択）。
+
+#### 15.1.2.0 ヘッダー右側の表示領域（固定）
+
+ヘッダーは「左（タイトル/コンテキスト）・中央（検索）・右（状態表示）」の3ゾーンで構成する。
+
+右側の表示領域は、原則として「状態の可視化」に徹し、クリック前提のボタンUIを置かない。
+
+表示項目（固定）:
+
+
+- Theme: `light | dark` の現在値を表示する。
+	- 変更操作は View→Theme または Settings から行えること（ボタンレス）。
+- DB: 現在使用中のDBファイルの情報を表示する。
+	- 表示はファイル名のみ（例: `taskmaster.db`）とする。
+	- DBが未設定/未作成の場合は `DB: (not set)` を表示する。
+
+ツールチップ（固定）:
+
+- Theme: 切替方法のヒント（例: `View → Theme`）
+- DB: フルパス、schema_version
+
+表示ルール:
+
+- 右側領域は1行に収め、長い文字列は省略表示（エリプシス）し、ツールチップで補完する。
+- 右側領域のクリックは「表示」用途に留め、操作の起点にしない（ボタンレス原則）。
+
+#### 15.1.2.1 フォーカスと遷移（必須）
+
+フォーカスの基本ルール:
+
+- 起動直後の初期ビューは Due とする。
+- 起動直後はメインコンテンツ（一覧）にフォーカスを置く。
+- サイドバー切替後も、原則としてメインコンテンツにフォーカスを戻す（連続レビュー操作を優先）。
+
+フォーカス移動（必須）:
+
+- Focus Sidebar（例: Alt+1 または View→Focus Sidebar）
+- Focus Search（例: Ctrl+F または View→Focus Search）
+- Focus List（例: Esc または View→Focus List）
+
+選択状態:
+
+- ビュー切替時、直前の選択行（task_id）が当該ビューに存在する場合は復元する。存在しない場合は先頭行を選択する（0件なら未選択）。
+- 検索フィルタ適用/解除時、選択行が結果に残る場合は選択を維持する。消えた場合は先頭行を選択する（0件なら未選択）。
+
+#### 15.1.2.2 メインコンテンツ（ビュー別仕様・必須）
+
+メインコンテンツはビューごとに以下の表示/動作を満たす。
+
+共通（Due/Waiting/Archived）:
+
+- 一覧は `TableView`（モデル/ビュー分離）で実装する。
+- 行はタスクを表し、主キーは `tasks.id` とする。
+- 既定ソートは仕様 15.6 および 22章に従う。
+- 行ダブルクリック/Enterで詳細を開く。
+
+##### 15.1.2.2.1 Dueビュー（復習待ち）
+
+表示:
+
+- 列（最小）:
+	- Title
+	- Last Completed（ローカル表示、無ければ空）
+	- Review Count
+	- Next Review At（ローカル表示、Dueなので通常は過去/現在。NULLは末尾）
+	- Tags
+- ソート: 22.1（古い順、NULL末尾）
+
+操作:
+
+- 完了: Ctrl+S（`good`）
+- grade指定完了: 1..4（again/hard/good/easy）
+- アーカイブ: Delete
+
+空状態（Dueが0件）:
+
+- メインに「Dueは0件。Waitingを確認するか、新規タスクを追加してください。」等、次の行動が分かるメッセージを表示する。
+
+##### 15.1.2.2.2 Waitingビュー（インターバル待ち）
+
+表示:
+
+- 列（最小）:
+	- Title
+	- Next Review At（ローカル表示）
+	- Remaining（残り時間。例: `3h 12m` / `2d 5h`）
+	- Review Count
+	- Tags
+- ソート: 22.2（新しい順、NULL末尾）
+
+操作:
+
+- 完了操作は原則無効（誤操作防止）。
+	- 右クリックメニューやショートカットからの完了も無効化し、ステータスバーに理由を表示する。
+- アーカイブ: Delete
+
+空状態（Waitingが0件）:
+
+- メインに「Waitingは0件。Dueのタスクを完了するとここに移動します。」等のメッセージを表示する。
+
+##### 15.1.2.2.3 Archivedビュー（アーカイブ）
+
+表示:
+
+- 列（最小）:
+	- Title
+	- Archived At（= deleted_at のローカル表示）
+	- Last Completed
+	- Review Count
+	- Tags
+- ソート: `deleted_at` 降順（新しいアーカイブが上）を既定とする。
+
+操作:
+
+- 復元: Ctrl+R（deleted_atをNULL、statusは14.5のCASEで復元）
+- 完全削除（復元不可）: Shift+Delete（19章のpurged_atをセット）
+
+空状態:
+
+- 「アーカイブは0件」表示。
+
+##### 15.1.2.2.4 Settingsビュー（設定）
+
+表示:
+
+- セクション（最小）:
+	- General: horizon_days, theme
+	- Storage: DBファイルパス、マイグレーション、バックアップ
+
+操作（ボタンレス）:
+
+- 設定値の編集はインライン編集または詳細ダイアログで行う。
+- アクションの起動はメニュー/ショートカット/コンテキストメニューから行う。
+	- Run Migration…（DB選択→確認→実行）
+	- Backup…（保存先選択→確認→実行）
+	- Recalculate All Tasks…（21章）
+
+空状態:
+
+- 常に表示（空状態なし）。
+
+#### 15.1.3 メニューバー（必須）
+メニューバーの構成例（最小）:
+
+- Task
+	- New Task…
+	- Edit…
+	- Complete (Good)
+	- Complete As…（grade選択）
+	- Archive
+	- Restore（Archived表示時）
+	- Purge（Archived表示時、危険操作）
+- View
+	- Go To → Due / Waiting / Archived / Settings
+	- Focus Sidebar
+	- Focus Search
+	- Focus List
+	- Refresh（Due更新含む）
+	- Theme（Light/Dark）
+- Settings
+	- Preferences…（horizon_days、DB、再計算、バックアップ等）
+
+#### 15.1.4 一覧の操作体系（必須）
+
+一覧（`TableView`）上での基本操作:
+
+- 行選択: ↑/↓（複数選択はShift/Control）
+- 詳細を開く: Enter またはダブルクリック
+- 編集: F2 または Enter（詳細画面内の編集）
+- 検索へフォーカス: Ctrl+F
+- 更新: F5（Due更新を含む）
+
+コンテキストメニュー（行上の右クリック）はビューにより内容が変わる。
+
+Dueビュー（行上）:
+
+- Open Details
+- Edit…
+- Complete (Good)
+- Complete As → again / hard / good / easy
+- Archive
+- Copy Title
+
+Waitingビュー（行上）:
+
+- Open Details
+- Edit…
+- Archive
+- Copy Title
+
+Archivedビュー（行上）:
+
+- Open Details
+- Restore
+- Purge（危険）
+- Copy Title
+
+空白部のコンテキストメニュー:
+
+- New Task…（Due/Waitingのみ表示）
+- Refresh
+
+#### 15.1.5 ショートカット（既定案・実装で上書き可）
+
+- New Task: Ctrl+N
+- Open Details: Enter
+- Edit Task: F2
+- Complete (Good): Ctrl+S（Due/詳細画面で有効）
+- Complete As: 1=again / 2=hard / 3=good / 4=easy
+- Archive: Delete
+- Restore（Archived）: Ctrl+R
+- Purge（Archived, 危険）: Shift+Delete
+- Search: Ctrl+F
+- Refresh: F5
+- Preferences: Ctrl+,
+- Switch View: Ctrl+1..4（15.1.1参照）
+
+### 15.1.6 テーマ切り替え（ライト/ダーク）
+
+- メニューまたは設定画面からライト/ダークを切り替える。
+- テーマは QML 側で適用する（例: `QtQuick.Controls.Material` の `Material.theme` を切り替える）。
+- テーマ切替は即時反映（アプリ再起動不要）とする。
+
+追加仕様（背景画像 + 透過UI）:
+
+- テーマに応じて、アプリ画面全体の背景画像を切り替える（15.1.6.2）。
+- ヘッダー/サイドバー/テーブル/ダイアログ等のUI面は、背景画像が透ける一定の透過度を持つ（15.1.6.1）。
+
+背景画像のパス :
+
+- ダークテーマの場合:/home/yakisenbei/Pictures/YakiSuperTaskMaster/theme/dark.png
+- ライトテーマの場合:/home/yakisenbei/Pictures/YakiSuperTaskMaster/theme/light.png
+
+### 15.1.6.1 配色・透過（固定）
+
+本アプリは、画面全体の背景にテーマ別の背景画像を表示し（15.1.6.2）、その上に半透明のUI面（サーフェス）を重ねる。
+
+基本方針（固定）:
+
+- 背景画像の上でも可読性を確保するため、UI面（ヘッダー/サイドバー/テーブル/ダイアログ）の背景は半透明とする。
+- 高彩度の強い色を面積の大きい要素（面/選択強調）に使わない。
+- エラー/危険は背景全面を赤くする等の強い表現は行わない（文言 + アイコン + 小さな色面で示す）。
+
+パレット（固定・HEX）:
+
+- Surface: `#252526`
+- Surface Elevated: `#2D2D30`
+- Separator / Border: `#3C3C3C`
+- Text Primary: `#E6E6E6`
+- Text Secondary: `#BDBDBD`
+- Text Disabled: `#7A7A7A`
+- Selection Background: `#3A3D41`
+- Accent: `#6CA0DC`
+- Danger: `#D16969`
+
+透過度（固定）:
+
+- Surface Opacity: `0.82`
+- Surface Elevated Opacity: `0.88`
+
+適用ルール（固定）:
+
+- 主要なUI面（ヘッダー、サイドバー、一覧の背景、詳細/編集ダイアログの面）には、上記の `Surface` / `Surface Elevated` と透過度を適用する。
+	- 例: `Surface` を `rgba(Surface, Surface Opacity)` として使用する（実装はQML側で統一）。
+- 罫線・区切りは Separator / Border を使用し、コントラストを強くしすぎない。
+- 選択状態は Selection Background を用いるが、面積の大きいベタ塗りは避け、行ハイライト等の限定的な面積に留める。
+
+補足（フォールバック）:
+
+- 背景画像が読み込めない場合に備え、背景色のフォールバックとして `#1E1E1E` を使用してよい（あくまでフォールバック）。
+
+### 15.1.6.2 背景画像（固定）
+
+テーマ別の背景画像を、アプリ画面全体の背景として表示する。
+
+背景画像の配置場所（固定）:
+
+- ダークテーマ: `/home/yakisenbei/Pictures/YakiSuperTaskMaster/dark`
+- ライトテーマ: `/home/yakisenbei/Pictures/YakiSuperTaskMaster/light`
+
+画像の選択ルール（固定）:
+
+- 各ディレクトリ直下の `background.png` を使用する。
+- `background.png` が存在しない場合は、拡張子が `.png|.jpg|.jpeg|.webp` のファイルを名前順で探索し、最初の1枚を使用する。
+- 画像が見つからない場合は、15.1.6.1 のフォールバック背景色を使用する。
+
+表示ルール（固定）:
+
+- 背景画像はウィンドウ全体に表示する。
+- 画像の縦横比は維持し、必要に応じてトリミングして全面を埋める（例: PreserveAspectCrop 相当）。
+- 背景画像はUIの操作対象ではない（クリック/選択/ドラッグ等の入力を受けない）。
 
 ### 15.2 タスク作成/編集ダイアログ
 
-- `QDialog`
+- `Dialog`（QML）
 - title必須のバリデーション
+- ボタンレス運用:
+	- 確定: Ctrl+S
+	- キャンセル: Esc
+	- 画面上のOK/Cancelボタンは配置しない
 
 ### 15.3 タスク詳細
 
-- 完了ボタン（Due/Waiting両方で押せるかは実装選択、基本はDueで押す）
+- 完了操作（ボタンは置かない）:
+	- 既定: Ctrl+S = `good`
+	- grade指定: 1=again / 2=hard / 3=good / 4=easy
+	- 右クリック → Complete As… でも実行可能
 - 履歴一覧（`completion_events` の completed_at）
-- （任意）パラメータ上書きUI（`task_params`）
 
 追加操作:
 
 - 「十分に復習できた」
 	- 既定動作: アーカイブ
-	- 代替: 完全削除（確認ダイアログ必須）
+
+危険操作（完全削除）の確認仕様（ボタンレス）:
+
+- 確認ダイアログは `Dialog`（QML）を用いる。
+- ユーザーに確認テキスト（例: `purge`）の入力を要求し、Enterで確定、Escでキャンセル。
 
 ## 17. 設定の永続化（ユーザー設定）
 
@@ -695,23 +1114,12 @@ UI方針:
 	- 初期値: 365
 	- 制約: 1〜365
 - theme
-	- 型: enum { system, light, dark }（systemは任意）
-	- 初期値: system（systemが無い場合はlight）
+	- 型: enum { light, dark }
+	- 初期値: light
 
 ### 17.2 保存先
 
-- 簡易: `QSettings` を使用してOS標準の設定ストアへ保存
-- 代替: DBに `app_settings` テーブルを作成して保存（将来の同期/移行に有利）
-
-### 17.3 （DB保存する場合のDDL例）
-
-```sql
-CREATE TABLE IF NOT EXISTS app_settings (
-	key   TEXT PRIMARY KEY,
-	value TEXT NOT NULL
-);
-
-```
+- `QSettings` を使用してOS標準の設定ストアへ保存する。
 
 ## 18. DBファイル・マイグレーション・バックアップ
 
@@ -736,9 +1144,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 ### 18.3 バックアップ
 
 - 自動バックアップは行わない。
-- 設定画面から任意タイミングでバックアップを作成できる。
-- 本仕様では、バックアップは **単純コピー** でよい。
-	- 推奨: コピー前にトランザクション中の処理がない状態にする（UIを一時的にロックする等）。
+- 設定画面からバックアップを作成できる。
+- 本仕様では、バックアップは **単純コピー** とする。
+	- コピー前にトランザクション中の処理がない状態にし、UIを一時的にロックする。
 
 ## 19. 論理削除・アーカイブの確定ルール
 
@@ -754,9 +1162,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 ### 20.1 完了（grade）UI
 
-- **「完了」ボタン = `good`（ワンクリック）** とする。
-- 「▼」で評価選択（`again/hard/good/easy`）を表示し、選択されたgradeで完了処理を実行する。
-- PySide6実装例: `QToolButton` の MenuButtonPopup を使用して「主ボタン + ▼」を構成する。
+ボタンレスのため、完了UIは「キー操作とコンテキストメニュー」を基本とする。
+
+- 既定完了: Ctrl+S = `good`
+- grade指定完了: 1=again / 2=hard / 3=good / 4=easy
+- マウス導線: 行の右クリック → Complete As → again/hard/good/easy
+
+補足:
+
+- Due一覧・詳細画面のどちらからも完了操作を実行できる。
+- Waiting一覧からの完了は原則無効（誤操作防止）。
 
 ### 20.2 タグ仕様
 
@@ -830,7 +1245,7 @@ ORDER BY
 	t.updated_at DESC;
 ```
 
-### 22.3 title/note検索
+### 22.3 title/note検索（Due/Waiting）
 
 ```sql
 SELECT t.*
@@ -841,6 +1256,11 @@ WHERE t.deleted_at IS NULL
 	AND (t.title LIKE :q OR t.note LIKE :q)
 ORDER BY t.updated_at DESC;
 ```
+
+補足（Archivedビューでのtitle/note検索）:
+
+- `WHERE` 句の基底条件を以下に置換する:
+	- `t.deleted_at IS NOT NULL AND t.purged_at IS NULL AND t.status = 'archived'`
 
 ### 22.4 `#タグ` 検索（単一タグ・最小実装）
 
@@ -855,6 +1275,11 @@ WHERE t.deleted_at IS NULL
 	AND g.name = :tag
 ORDER BY t.updated_at DESC;
 ```
+
+補足（Archivedビューでの`#タグ`検索）:
+
+- `WHERE` 句の基底条件を以下に置換する:
+	- `t.deleted_at IS NOT NULL AND t.purged_at IS NULL AND t.status = 'archived'`
 
 ### 22.4.1 `#タグ` AND検索（複数タグ）
 
